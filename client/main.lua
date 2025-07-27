@@ -20,25 +20,25 @@ local function DispatchAlert()
         length = 2
     }
 
-    exports["ps-dispatch"]:CustomAlert(alert)
+    exports['ps-dispatch']:CustomAlert(alert)
 end
 
 local function SmashMeter(data)
     local ped = PlayerPedId()
     local entity = data.entity
+    local entityCoords = GetEntityCoords(entity)
 
     if Config.RequiredPolice > 0 then
         local policeCount = lib.callback.await('rogue-MeterRobbery:server:PoliceCheck', false)
-        dbug('Police Count:', policeCount)
         if policeCount < Config.RequiredPolice then
             return lib.notify({description = 'Not enough police on duty', type = 'error'})
         end
     end
-    local hasCooldown = lib.callback.await('rogue-MeterRobbery:server:CoolDown', false)
 
+    local hasCooldown = lib.callback.await('rogue-MeterRobbery:server:CoolDown', 1000, true, entityCoords)
     if not hasCooldown then
-        RequestAnimDict("melee@large_wpn@streamed_core")
-        while not HasAnimDictLoaded("melee@large_wpn@streamed_core") do Wait(1) end
+        RequestAnimDict('melee@large_wpn@streamed_core')
+        while not HasAnimDictLoaded('melee@large_wpn@streamed_core') do Wait(1) end
 
         TaskTurnPedToFaceEntity(ped, entity, -1)
 
@@ -49,13 +49,21 @@ local function SmashMeter(data)
         end
 
         ClearPedTasksImmediately(ped)
-        TaskPlayAnim(ped, "melee@large_wpn@streamed_core", "ground_attack_on_spot", 8.0, -8.0, 1500, 1, 0, false, false, false)
+        TaskPlayAnim(ped, 'melee@large_wpn@streamed_core', 'ground_attack_on_spot', 8.0, -8.0, 1500, 1, 0, false, false, false)
         
-        Wait(1000)
-        local entityCoords = GetEntityCoords(entity)
+        Wait(500)
+
+        TriggerServerEvent('InteractSound_SV:PlayWithinDistance', 10, 'coins', 0.5)
+
+        Wait(500)
+
+        local chance = math.random()
+        if chance <= Config.AlertChance then
+            DispatchAlert()
+        end
+
         lib.callback.await('rogue-MeterRobbery:server:Reward', 10000, entityCoords)
-        DispatchAlert()
-    else
+        else
         return lib.notify({description = 'Your to tired, try again later', type = 'error'})
     end
 end
@@ -67,6 +75,11 @@ local function CreateTargets()
             icon = 'fa-solid fa-hand-fist',
             label = 'Smash',
             onSelect = function(data)
+                local entityCoords = GetEntityCoords(data.entity)
+                local locked = lib.callback.await('rogue-MeterRobbery:server:CoolDown', false, false, entityCoords, true)
+                if locked == 'locked' then
+                    return lib.notify({description = 'This meter looks broken', type = 'error'})
+                end
                 SmashMeter(data)
             end,
             canInteract = function()
@@ -84,6 +97,25 @@ local function CreateTargets()
         }
     })
 end
+
+RegisterNetEvent('rogue-MeterRobbery:client:PedReact', function(coords)
+    local peds = GetGamePool('CPed')
+    for _, ped in pairs(peds) do
+        if not IsPedAPlayer(ped) and not IsPedDeadOrDying(ped, true) and not IsPedInAnyVehicle(ped, false) then
+            local pedCoords = GetEntityCoords(ped)
+            if #(pedCoords - coords) < 15.0 then
+                PlayPedAmbientSpeechNative(ped, 'GENERIC_FRIGHTENED_HIGH', 'SPEECH_PARAMS_FORCE_SHOUTED')
+                TaskSmartFleeCoord(ped ,coords.x, coords.y, coords.z, 100.0, -1, false, false)
+
+                Citizen.SetTimeout(15000, function()
+                    if DoesEntityExist(ped) then
+                        ClearPedTasks(ped)
+                    end
+                end)
+            end
+        end
+    end
+end)
 
 Citizen.CreateThread(function()
     CreateTargets()
